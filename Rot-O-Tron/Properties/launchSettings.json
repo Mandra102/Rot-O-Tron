@@ -1,8 +1,7 @@
 {
   "profiles": {
     "Rot-O-Tron": {
-      "commandName": "Project",
-      "commandLineArgs": "C:\\Users\\Sebastian\\source\\repos\\PacMan\\PacMan\\PacMan.csproj"
+      "commandName": "Project"
     }
   }
 }
