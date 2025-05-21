@@ -16,17 +16,23 @@ class Program
             return;
         }
 
-        var projectPath = args[0];
+        string projectPath = args[0];
 
-        var instances = MSBuildLocator.QueryVisualStudioInstances().ToList();
+        if (!System.IO.File.Exists(projectPath))
+        {
+            Console.WriteLine($"Datei nicht gefunden: {projectPath}");
+            return;
+        }
+
+        List<VisualStudioInstance> instances = MSBuildLocator.QueryVisualStudioInstances().ToList();
         if (!instances.Any())
         {
             Console.WriteLine("Keine MSBuild Instanzen gefunden!");
             return;
         }
-        foreach (var i in instances)
+        foreach (VisualStudioInstance vsi in instances)
         {
-            Console.WriteLine($"Gefunden: {i.Name} - {i.MSBuildPath}");
+            Console.WriteLine($"Gefunden: {vsi.Name} - {vsi.MSBuildPath}");
         }
         var instance = instances.First();
         MSBuildLocator.RegisterInstance(instance);
@@ -36,7 +42,7 @@ class Program
 
         try
         {
-            var project = await workspace.OpenProjectAsync(projectPath);
+            Project project = await workspace.OpenProjectAsync(projectPath);
             Console.WriteLine($"Projekt geladen: {project.Name}");
             Console.WriteLine($"Anzahl Dokumente: {project.DocumentIds.Count}");
 
@@ -46,11 +52,11 @@ class Program
 
                 Console.WriteLine($"Datei: {document.Name}");
 
-                var syntaxTree = await document.GetSyntaxTreeAsync();
+                SyntaxTree? syntaxTree = await document.GetSyntaxTreeAsync();
                 if (syntaxTree == null) continue;
 
-                var root = await syntaxTree.GetRootAsync();
-                var methods = root.DescendantNodes().OfType<MethodDeclarationSyntax>();
+                SyntaxNode root = await syntaxTree.GetRootAsync();
+                IEnumerable<MethodDeclarationSyntax> methods = root.DescendantNodes().OfType<MethodDeclarationSyntax>();
 
                 foreach (var method in methods)
                 {
@@ -66,8 +72,8 @@ class Program
 
     private static void AnalyzeMethod(MethodDeclarationSyntax method)
     {
-        var linesSpan = method.GetLocation().GetLineSpan();
-        var length = linesSpan.EndLinePosition.Line - linesSpan.StartLinePosition.Line;
+        FileLinePositionSpan linesSpan = method.GetLocation().GetLineSpan();
+        int length = linesSpan.EndLinePosition.Line - linesSpan.StartLinePosition.Line +1;
 
         if (length > 40)
         {
