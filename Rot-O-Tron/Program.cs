@@ -5,6 +5,10 @@ using Microsoft.CodeAnalysis.MSBuild;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis;
 using System.Threading.Tasks;
+using System.Collections.Generic;
+using System.IO;
+using System.Text.Json;
+using System.CommandLine;
 
 class Program
 {
@@ -12,15 +16,16 @@ class Program
     {
         if (args.Length == 0)
         {
-            Console.WriteLine("Bitte Pfad zu einer .csproj Datei angeben");
-            return;
+            Console.WriteLine("Bitte Befehl eingeben (z.B. checkProject --path:C:\\test\\test.csproj --checkMethodLength --checkMagicNumbers):");
+            var input = Console.ReadLine() ?? "";
+            args = input.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         }
 
-        string projectPath = args[0];
+        var settings = SettingsProvider.GetSettings(args);
 
-        if (!System.IO.File.Exists(projectPath))
+        if (string.IsNullOrEmpty(settings.ProjectPath) || !File.Exists(settings.ProjectPath))
         {
-            Console.WriteLine($"Datei nicht gefunden: {projectPath}");
+            Console.WriteLine("Gültigen Pfad mit --path:<PfadZurCsproj> angeben oder in appsettings.json setzen!");
             return;
         }
 
@@ -42,7 +47,7 @@ class Program
 
         try
         {
-            Project project = await workspace.OpenProjectAsync(projectPath);
+            Project project = await workspace.OpenProjectAsync(settings.ProjectPath);
             Console.WriteLine($"Projekt geladen: {project.Name}");
             Console.WriteLine($"Anzahl Dokumente: {project.DocumentIds.Count}");
 
@@ -60,7 +65,7 @@ class Program
 
                 foreach (var method in methods)
                 {
-                    AnalyzeMethod(method);
+                    AnalyzeMethod(method, settings.CheckMethodLength, settings.CheckMagicNumbers);
                 }
             }
         }
@@ -70,33 +75,35 @@ class Program
         }
     }
 
-    private static void AnalyzeMethod(MethodDeclarationSyntax method)
+    private static void AnalyzeMethod(MethodDeclarationSyntax method, bool checkMethodLength, bool checkMagicNumbers)
     {
         FileLinePositionSpan linesSpan = method.GetLocation().GetLineSpan();
-        int length = linesSpan.EndLinePosition.Line - linesSpan.StartLinePosition.Line +1;
+        int length = linesSpan.EndLinePosition.Line - linesSpan.StartLinePosition.Line + 1;
 
-        if (length > 40)
+        if (checkMethodLength && length > 40)
         {
             Console.WriteLine($"Methode {method.Identifier.Text} ist {length} Zeilen lang.");
         }
 
-        const string ZeroLiteral = "0";
-        const string OneLiteral = "1";
-
-        bool IsMagicNumber(SyntaxToken t) =>
-            t.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.NumericLiteralToken)
-            && t.ValueText != ZeroLiteral
-            && t.ValueText != OneLiteral;
-
-        var magicNumbers = method.DescendantTokens()
-            .Where(IsMagicNumber)
-            .Select(t => t.ValueText)
-            .Distinct();
-
-        foreach (var number in magicNumbers)
+        if (checkMagicNumbers)
         {
-            Console.WriteLine($"Magische Zahl {number} in Methode {method.Identifier.Text}");
+            const string ZeroLiteral = "0";
+            const string OneLiteral = "1";
+
+            bool IsMagicNumber(SyntaxToken t) =>
+                t.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.NumericLiteralToken)
+                && t.ValueText != ZeroLiteral
+                && t.ValueText != OneLiteral;
+
+            var magicNumbers = method.DescendantTokens()
+                .Where(IsMagicNumber)
+                .Select(t => t.ValueText)
+                .Distinct();
+
+            foreach (var number in magicNumbers)
+            {
+                Console.WriteLine($"Magische Zahl {number} in Methode {method.Identifier.Text}");
+            }
         }
     }
 }
-
