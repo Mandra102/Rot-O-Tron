@@ -1,12 +1,7 @@
-﻿using System;
-using System.Linq;
-using Microsoft.Build.Locator;
+﻿using Microsoft.Build.Locator;
 using Microsoft.CodeAnalysis.MSBuild;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis;
-using System.Threading.Tasks;
-using System.Collections.Generic;
-using System.IO;
 using System.Text.Json;
 using System.CommandLine;
 
@@ -39,6 +34,10 @@ class Program
             name: "--checkNuget",
             description: "Prüft auf veraltete NuGet-Pakete"
         );
+        var checkUnusedUsingsOption = new Option<bool?>(
+            name: "--checkUnusedUsings",
+            description: "Prüft auf unbenutzte using-Direktiven"
+        );
 
         var rootCommand = new RootCommand("Rot-O-Tron Code Analyzer");
 
@@ -48,6 +47,7 @@ class Program
         rootCommand.AddOption(checkMethodLengthCountOption);
         rootCommand.AddOption(countLinesOption);
         rootCommand.AddOption(checkNugetOption);
+        rootCommand.AddOption(checkUnusedUsingsOption);
 
         // Argumente parsen
         var parseResult = rootCommand.Parse(args);
@@ -55,16 +55,17 @@ class Program
         string? projectPath = parseResult.GetValueForOption(pathOption);
         bool? checkMethodLength = parseResult.GetValueForOption(checkMethodLengthOption);
         bool? checkMagicNumbers = parseResult.GetValueForOption(checkMagicNumbersOption);
-        int? MethodLengthDefault = parseResult.GetValueForOption(checkMethodLengthCountOption);
+        int methodLengthDefault = parseResult.GetValueForOption(checkMethodLengthCountOption);
         bool? countLines = parseResult.GetValueForOption(countLinesOption);
         bool? checkNuget = parseResult.GetValueForOption(checkNugetOption);
+        bool? checkUnusedUsings = parseResult.GetValueForOption(checkUnusedUsingsOption);
 
-        await LoadAndValidateSettings(projectPath, checkMethodLength, checkMagicNumbers, countLines, checkNuget);
+        await LoadAndValidateSettings(projectPath, checkMethodLength, methodLengthDefault, checkMagicNumbers, countLines, checkNuget, checkUnusedUsings);
 
         return 0;
     }
 
-    private static async Task LoadAndValidateSettings(string? projectPath, bool? checkMethodLength, bool? checkMagicNumbers, bool? countLines, bool? checkNuget)
+    private static async Task LoadAndValidateSettings(string? projectPath, bool? checkMethodLength, int methodLengthDefault, bool? checkMagicNumbers, bool? countLines, bool? checkNuget, bool? checkUnusedUsings)
     {
         if ((string.IsNullOrEmpty(projectPath) || checkMethodLength == null || checkMagicNumbers == null) && File.Exists("appsettings.json"))
         {
@@ -76,9 +77,11 @@ class Program
                 {
                     projectPath ??= settings.ProjectPath;
                     checkMethodLength ??= settings.CheckMethodLength;
+                    methodLengthDefault = settings.MethodLengthDefault;
                     checkMagicNumbers ??= settings.CheckMagicNumbers;
                     countLines ??= settings.CountLines;
                     checkNuget ??= settings.CheckNuget;
+                    checkUnusedUsings ??= settings.CheckUnusedUsings;
                 }
             }
             catch (Exception ex)
@@ -93,10 +96,10 @@ class Program
             return;
         }
 
-        await AnalyzeProject(projectPath, checkMethodLength!.Value, checkMagicNumbers!.Value, countLines!.Value, checkNuget!.Value);
+        await AnalyzeProject(projectPath, checkMethodLength!.Value, methodLengthDefault!, checkMagicNumbers!.Value, countLines!.Value, checkNuget!.Value, checkUnusedUsings!.Value);
     }
 
-    private static async Task AnalyzeProject(string projectPath, bool checkMethodLength, bool checkMagicNumbers, bool countLines, bool checkNuget)
+    private static async Task AnalyzeProject(string projectPath, bool checkMethodLength, int methodLengthDefault, bool checkMagicNumbers, bool countLines, bool checkNuget, bool checkUnusedUsings)
     {
         List<VisualStudioInstance> instances = MSBuildLocator.QueryVisualStudioInstances().ToList();
         if (!instances.Any())
@@ -136,7 +139,12 @@ class Program
 
                 foreach (var method in methods)
                 {
-                    AnalyzeMethod(method, checkMethodLength, checkMagicNumbers);
+                    AnalyzeMethod(method, checkMethodLength, methodLengthDefault, checkMagicNumbers);
+                }
+
+                if (checkUnusedUsings)
+                {
+                    await CheckUnusedUsings(document);
                 }
             }
 
@@ -158,12 +166,12 @@ class Program
         }
     }
 
-    private static void AnalyzeMethod(MethodDeclarationSyntax method, bool checkMethodLength, bool checkMagicNumbers)
+    private static void AnalyzeMethod(MethodDeclarationSyntax method, bool checkMethodLength, int methodLengthDefault, bool checkMagicNumbers)
     {
         FileLinePositionSpan linesSpan = method.GetLocation().GetLineSpan();
         int length = linesSpan.EndLinePosition.Line - linesSpan.StartLinePosition.Line + 1;
 
-        if (checkMethodLength && length > 40)
+        if (checkMethodLength && length > methodLengthDefault)
         {
             Console.WriteLine($"Methode {method.Identifier.Text} ist {length} Zeilen lang.");
         }
@@ -227,5 +235,47 @@ class Program
                 Console.WriteLine($"Paket {name}: Version konnte nicht geprüft werden.");
             }
         }
+    }
+
+    private static async Task CheckUnusedUsings(Document document)
+    {
+        var root = await document.GetSyntaxRootAsync();
+        if (root == null) return;
+
+        var usings = root.DescendantNodes().OfType<UsingDirectiveSyntax>().ToList();
+        var semanticModel = await document.GetSemanticModelAsync();
+        if (semanticModel == null) return;
+
+        foreach (var usingDirective in usings)
+        {
+            // Namespace-Symbol holen
+            var symbol = semanticModel.GetSymbolInfo(usingDirective.Name).Symbol as INamespaceSymbol;
+            if (symbol == null) continue;
+
+            // Prüfen, ob ein Identifier im Code zu diesem Namespace gehört
+            bool isUsed = root.DescendantNodes()
+                .OfType<IdentifierNameSyntax>()
+                .Select(id => semanticModel.GetSymbolInfo(id).Symbol)
+                .Where(s => s != null)
+                .Any(s => SymbolBelongsToNamespace(s, symbol));
+
+            if (!isUsed)
+            {
+                Console.WriteLine($"Unbenutzte using-Direktive: {usingDirective.Name} in Datei {document.Name}");
+            }
+        }
+    }
+
+    // Hilfsmethode: Prüft, ob ein Symbol zu einem Namespace gehört
+    private static bool SymbolBelongsToNamespace(ISymbol symbol, INamespaceSymbol ns)
+    {
+        var containing = symbol.ContainingNamespace;
+        while (containing != null && !containing.IsGlobalNamespace)
+        {
+            if (SymbolEqualityComparer.Default.Equals(containing, ns))
+                return true;
+            containing = containing.ContainingNamespace;
+        }
+        return false;
     }
 }
