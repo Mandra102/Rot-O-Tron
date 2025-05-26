@@ -1,12 +1,7 @@
-﻿using System;
-using System.Linq;
-using Microsoft.Build.Locator;
+﻿using Microsoft.Build.Locator;
 using Microsoft.CodeAnalysis.MSBuild;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis;
-using System.Threading.Tasks;
-using System.Collections.Generic;
-using System.IO;
 using System.Text.Json;
 using System.CommandLine;
 
@@ -22,7 +17,7 @@ class Program
             name: "--checkMethodLength",
             description: "Prüft, ob Methoden zu lang sind"
         );
-        var checkMethodLengthCountOption = new Option<int>(
+        var checkMethodLengthCountOption = new Option<int?>(
             name: "--checkMethodLengthDefault",
             description: "Standardwert für checkMethodLength",
             getDefaultValue: () => 40
@@ -52,51 +47,54 @@ class Program
         // Argumente parsen
         var parseResult = rootCommand.Parse(args);
 
-        string? projectPath = parseResult.GetValueForOption(pathOption);
-        bool? checkMethodLength = parseResult.GetValueForOption(checkMethodLengthOption);
-        bool? checkMagicNumbers = parseResult.GetValueForOption(checkMagicNumbersOption);
-        int? MethodLengthDefault = parseResult.GetValueForOption(checkMethodLengthCountOption);
-        bool? countLines = parseResult.GetValueForOption(countLinesOption);
-        bool? checkNuget = parseResult.GetValueForOption(checkNugetOption);
+        var settings = new Settings
+        {
+            ProjectPath = parseResult.GetValueForOption(pathOption),
+            CheckMethodLength = parseResult.GetValueForOption(checkMethodLengthOption),
+            CheckMethodLengthDefault = parseResult.GetValueForOption(checkMethodLengthCountOption) ?? 40,
+            CheckMagicNumbers = parseResult.GetValueForOption(checkMagicNumbersOption),
+            CountLines = parseResult.GetValueForOption(countLinesOption),
+            CheckNuget = parseResult.GetValueForOption(checkNugetOption)
+        };
 
-        await LoadAndValidateSettings(projectPath, checkMethodLength, checkMagicNumbers, countLines, checkNuget);
+
+        await LoadAndValidateSettings(settings);
 
         return 0;
     }
 
-    private static async Task LoadAndValidateSettings(string? projectPath, bool? checkMethodLength, bool? checkMagicNumbers, bool? countLines, bool? checkNuget)
+    private static async Task LoadAndValidateSettings(Settings cliSettings)
     {
-        if ((string.IsNullOrEmpty(projectPath) || checkMethodLength == null || checkMagicNumbers == null) && File.Exists("appsettings.json"))
+        Settings settings = cliSettings;
+
+        if (File.Exists("appsettings.json"))
         {
             try
             {
                 var json = File.ReadAllText("appsettings.json");
-                var settings = JsonSerializer.Deserialize<Settings>(json);
-                if (settings != null)
+                var appSettings = JsonSerializer.Deserialize<Settings>(json);
+                if (appSettings != null)
                 {
-                    projectPath ??= settings.ProjectPath;
-                    checkMethodLength ??= settings.CheckMethodLength;
-                    checkMagicNumbers ??= settings.CheckMagicNumbers;
-                    countLines ??= settings.CountLines;
-                    checkNuget ??= settings.CheckNuget;
+                    // Merge: CLI-Settings haben Vorrang, sonst appsettings.json
+                    settings = MergeSettings(cliSettings, appSettings);
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Fehler beim Laden der Settings: {ex.Message}");
+                Console.WriteLine($"Fehler beim Laden der Settings aus den Appsettings: {ex.Message}");
             }
         }
 
-        if (string.IsNullOrEmpty(projectPath) || !File.Exists(projectPath))
+        if (string.IsNullOrEmpty(settings.ProjectPath) || !File.Exists(settings.ProjectPath))
         {
             Console.WriteLine("Gültigen Pfad mit --ProjectPath angeben oder in appsettings.json setzen!");
             return;
         }
 
-        await AnalyzeProject(projectPath, checkMethodLength!.Value, checkMagicNumbers!.Value, countLines!.Value, checkNuget!.Value);
+        await AnalyzeProject(settings);
     }
 
-    private static async Task AnalyzeProject(string projectPath, bool checkMethodLength, bool checkMagicNumbers, bool countLines, bool checkNuget)
+    private static async Task AnalyzeProject(Settings settings)
     {
         List<VisualStudioInstance> instances = MSBuildLocator.QueryVisualStudioInstances().ToList();
         if (!instances.Any())
@@ -112,43 +110,42 @@ class Program
 
         try
         {
-            Project project = await workspace.OpenProjectAsync(projectPath);
+            Project project = await workspace.OpenProjectAsync(settings.ProjectPath!);
             Console.WriteLine($"Projekt geladen: {project.Name}");
             Console.WriteLine($"Anzahl Dokumente: {project.DocumentIds.Count}");
 
             foreach (var document in project.Documents)
             {
-                if (document.Name.EndsWith(".Designer.cs")) continue;
+                if (document.Name.EndsWith(".Designer.cs"))
+                    continue;
 
                 Console.WriteLine($"Datei: {document.Name}");
 
-                if (countLines)
+                if (settings.CountLines ?? false)
                 {
                     var text = await document.GetTextAsync();
                     totalLines += text.Lines.Count;
                 }
 
                 SyntaxTree? syntaxTree = await document.GetSyntaxTreeAsync();
-                if (syntaxTree == null) continue;
+                if (syntaxTree == null)
+                    continue;
 
                 SyntaxNode root = await syntaxTree.GetRootAsync();
                 IEnumerable<MethodDeclarationSyntax> methods = root.DescendantNodes().OfType<MethodDeclarationSyntax>();
 
                 foreach (var method in methods)
                 {
-                    AnalyzeMethod(method, checkMethodLength, checkMagicNumbers);
+                    AnalyzeMethod(method, settings.CheckMethodLength ?? false, settings.CheckMagicNumbers ?? false);
                 }
             }
 
-            if (countLines)
-            {
+            if (settings.CountLines ?? false)
                 Console.WriteLine($"Gesamtanzahl Codezeilen im Projekt: {totalLines}");
-            }
 
-            if (checkNuget)
-            {
-                await CheckNugetPackages(projectPath);
-            }
+
+            if (!string.IsNullOrEmpty(settings.ProjectPath) && (settings.CheckNuget ?? false))
+                await CheckNugetPackages(settings.ProjectPath);
 
             Console.ReadKey();
         }
@@ -213,19 +210,34 @@ class Program
                 var json = await http.GetStringAsync(url);
                 var versions = System.Text.Json.JsonDocument.Parse(json).RootElement.GetProperty("versions");
                 var latest = versions.EnumerateArray().Last().GetString();
+
                 if (latest != null && latest != version)
-                {
                     Console.WriteLine($"Paket {name}: installiert {version}, aktuell {latest} -> Update verfügbar!");
-                }
                 else
-                {
                     Console.WriteLine($"Paket {name}: installiert {version}, aktuell.");
-                }
             }
             catch
             {
                 Console.WriteLine($"Paket {name}: Version konnte nicht geprüft werden.");
             }
         }
+    }
+    private static T MergeSettings<T>(T primary, T fallback) where T : class, new()
+    {
+        var result = new T();
+        var props = typeof(T).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+
+        foreach (var prop in props)
+        {
+            var primaryValue = prop.GetValue(primary);
+            var fallbackValue = prop.GetValue(fallback);
+
+            // Für Nullable-Typen: Wenn primaryValue != null, dann übernehmen, sonst fallback
+            if (primaryValue != null)
+                prop.SetValue(result, primaryValue);
+            else
+                prop.SetValue(result, fallbackValue);
+        }
+        return result;
     }
 }
