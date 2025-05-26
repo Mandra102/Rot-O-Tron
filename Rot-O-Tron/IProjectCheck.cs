@@ -1,6 +1,9 @@
 using Microsoft.CodeAnalysis;
 
-public interface IProjectCheck
+namespace Rot_O_Tron.Settings
 {
-    Task RunAsync(Project project, Settings settings);
+    internal interface IProjectCheck
+    {
+        Task RunOnDocumentAsync(Document document, Settings settings);
+    }
 }
