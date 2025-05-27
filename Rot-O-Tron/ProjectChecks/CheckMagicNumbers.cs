@@ -1,5 +1,6 @@
 ﻿using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Spectre.Console;
 
 namespace Rot_O_Tron.Settings
 {
@@ -26,7 +27,8 @@ namespace Rot_O_Tron.Settings
 
             foreach (var literal in literals)
             {
-                Console.WriteLine($"Magische Zahl gefunden: {literal.Token.ValueText} in Datei {document.Name}");
+                //Console.WriteLine($"Magische Zahl gefunden: {literal.Token.ValueText} in Datei {document.Name}");
+                AnsiConsole.MarkupLine($"[red]Magische Zahl gefunden: {literal.Token.ValueText} in Datei {document.Name}[/]");
             }
         }
     }

@@ -78,6 +78,9 @@ class Program
         var packageRefs = doc.GetElementsByTagName("PackageReference");
         foreach (System.Xml.XmlNode node in packageRefs)
         {
+            if (node.Attributes == null) 
+                continue;
+
             var name = node.Attributes["Include"]?.Value;
             var version = node.Attributes["Version"]?.Value;
             if (name == null || version == null) continue;

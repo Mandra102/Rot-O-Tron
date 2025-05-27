@@ -1,4 +1,5 @@
 ﻿using Microsoft.CodeAnalysis;
+using Spectre.Console;
 
 namespace Rot_O_Tron.Settings
 {
@@ -13,7 +14,8 @@ namespace Rot_O_Tron.Settings
                 return;
 
             var text = await document.GetTextAsync();
-            Console.WriteLine($"Datei {document.Name}: {text.Lines.Count} Zeilen");
+            //Console.WriteLine($"Datei {document.Name}: {text.Lines.Count} Zeilen");
+            AnsiConsole.MarkupLine($"[blue]Datei {document.Name}:[/] [green]{text.Lines.Count} Zeilen[/]");
         }
     }
 }
